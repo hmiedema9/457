@@ -1,0 +1,101 @@
+Implementation details:
+
+So far we only see application layer packets associated with a specific port number.  Here we are dealing with ARP and ICMP which iS NOT application layer.  We would never see these packets with what we were using before. So we need to do things differently.
+
+Create the socket:
+
+socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL))
+
+This creates a "packet socket"... instead of recieving TCP or UDP on specific port we say we want to recieve everything having to do with a specific protocol. 
+
+SOCK_RAW:  Says I want ALL of the bytes of the packet.
+
+ETH_P_ALL:  Just give me everything
+
+This gives us a lot of flexibility but do this unless we have root permissions.  So we are going to program on a VM instead of our real computers. 
+
+
+ssh -Y 
+
+ARP:
+
+Payload consists of 4 addresses:
+
+	1. Hardware of Sender
+	2. Hardware of Receiver
+	3. Protocol of Sender
+	4. Protocol of Receiver
+
+
+Hardware Type (HTYPE):
+	Size: 2 bytes
+	Definition: Specifies the network protocol type
+	Example: Ethernet = 1
+
+Protocol Type (PTYPE):
+	Size: 2 bytes
+	Definition: Specifies the internetwork protocol for which the ARP request is intended
+	Example: For IPv4 this value = 0x0800
+
+Hardware Length (HLEN):
+	Size: 1 byte
+	Definition: Length (in octets) of a hardware address
+	Example: Ethernet address length is 6(octets)
+
+Protocol Length (PLEN):
+	Size: 1 byte
+	Definition: Length(in octets) of addresses used in the upper layer protocol specified in PTYPE
+	Example: IPv4 address size is 4 octets
+
+Operation (OPER):
+	Size: 2 bytes
+	Definition: Specifies the operation that the sender is performing
+	Example: 1 for request, 2 for reply
+
+Sender Hardware Address (SHA):
+	Size: 6 bytes 
+	Definition: Media address of the sender
+	Example: 
+		Request: Indicates the address of the host sending the request
+		Reply: Indicates the address of the host that the request was looking for
+
+Sender Protocol Address (SPA):
+	Size: 4 bytes
+	Definition: Internetwork address of the sender
+	Example: 
+
+Target Hardware Address (THA):
+	Size: 6 bytes
+	Definition: Media address of the intended receiver
+	Example:
+		Request: This field is ignored
+		Reply: Inidicates the address of the host that originated the ARP request
+
+Target Protocol Address (TPA):
+	Size: 4 bytes:
+	Definition: Internetwork address of the intended receiver
+	Example:
+
+
+
+
+Routing Table:
+	
+	3 Coulumns:
+		1. Network Prefix
+		2. IP address of a next hop device
+		3. Interface
+
+	*Packets matching the prefix should be forwarded on the indicated interface
+	*Next hop IP address indicates which device the packet should be forwarded to
+	*If no next hop address for a prefix, the packet should be forwarded to destination specified in IP header
+
+
+sudo dhclient eth1
+
+*to access internet in mininet
+
+
+
+*command to copy file 
+scp prj3-net.py mininet@192.168.56.101:~/router

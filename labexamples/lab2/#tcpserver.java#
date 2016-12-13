@@ -1,0 +1,31 @@
+/* CIS 457 - Lab 2 */
+/* By: Hayden Miedema */
+import java.io.*;
+import java.net.*;
+import java.util.Scanner;
+
+class tcpserver{
+	public static void main(String argv[]) throws Exception{
+		Scanner scan = new Scanner(System.in);
+		System.out.println("Enter a port number: ");
+		int port = scan.nextInt();
+		ServerSocket listenSocket = new ServerSocket(port);
+		while(true){
+			Socket connectionSocket = listenSocket.accept();
+			BufferedReader inFromClient =	
+				new BufferedReader(
+					new InputStreamReader(connectionSocket.getInputStream()));
+			DataOutputStream outToClient = 
+				new DataOutputStream(connectionSocket.getOutputStream());
+			String clientMessage = inFromClient.readLine();
+			System.out.println("The client said: " + clientMessage);
+			
+			//Use outToClient to write message back to the client
+			outToClient.writeChars(clientMessage);
+			System.out.println("Message sent to the client is "+clientMessage);
+			connectionSocket.close();
+	
+		}	
+			
+	}
+}

@@ -1,0 +1,449 @@
+/*
+ * Project 3 - Virtual Router
+ * By: Hayden Miedema and Douglas Money
+ * 
+ */
+
+#include <sys/socket.h>
+#include <netpacket/packet.h>
+#include <net/ethernet.h>
+#include <stdio.h>
+#include <errno.h>
+#include <sys/types.h>
+#include <ifaddrs.h>
+#include <arpa/inet.h>
+
+#include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <linux/if.h>
+#include <netdb.h>
+#include <stdio.h>
+#include <string.h>
+
+#define BUF_SIZE 42
+
+unsigned short calc_check(unsigned short int *);
+//void ICMPError();
+
+void* buffer = NULL;
+
+struct tableentry{
+    char prefix[19];
+    char nexthop[16];
+    char interface[8];
+};
+
+struct __attribute__((packed)) arp_header {
+    unsigned short arp_hd;
+    unsigned short arp_pr;
+    unsigned char arp_hd1;
+    unsigned char arp_pr1;
+    unsigned short arp_op;
+    unsigned char arp_sma[6];
+    unsigned char arp_sia[4];
+    unsigned char arp_dma[6];
+    unsigned char arp_dia[4];
+};
+struct __attribute__((packed)) ip_src_dst
+{
+    unsigned char src[4];
+    unsigned char dst[4];
+};
+struct __attribute__((packed)) icmp_pack
+{
+    unsigned char icmp_type;
+    unsigned char icmp_code;
+    unsigned short int icmp_sum;
+};
+struct __attribute__((packed)) ip_header{
+    unsigned char ip_v:4, ip_hl:4;/* this means that each member is 4 bits */
+    unsigned char ip_tos;       //1 Byte
+    unsigned short int ip_len;  //2 Byte
+    unsigned short int ip_id;   //2 Byte
+    unsigned short int ip_off;  //2 Byte
+    unsigned char ip_ttl;       //1 Byte
+    unsigned char ip_p;         //1 Byte
+    unsigned short int ip_sum;  //2 Byte
+    unsigned int ip_src;        //4 Byte
+    unsigned int ip_dst;        //4 Byte
+};
+
+void getmac(char * mac, char * interface)
+{
+    struct ifreq s;
+    int fd = socket(PF_INET, SOCK_DGRAM, IPPROTO_IP);
+    printf("in get mac: %s",interface);
+    strcpy(s.ifr_name, interface);
+    if (0 == ioctl(fd, SIOCGIFHWADDR, &s)) {
+        int i;
+        for (i = 0; i < 6; ++i){
+            printf(" %02x", (unsigned char) s.ifr_addr.sa_data[i]);
+            mac[i] = s.ifr_addr.sa_data[i];
+        }
+        puts("\n");
+
+    }
+
+}
+
+int process_arppkt(struct sockaddr_ll * recvaddr, int * count){
+    int isARP = 0;
+    if(recvaddr->sll_protocol == 1544) {
+        (*count) += 1;
+        printf("ARP: YES\n");
+        isARP = 1;
+    }else
+        printf("ARP: NO\n");
+    return isARP;
+}
+
+int process_icmppkt(struct sockaddr_ll * recvaddr, int * count){
+    int isICMP = 0;
+    if(recvaddr->sll_protocol == 8) {
+        (*count) += 1;
+        printf("ICMP: YES\n");
+        isICMP = 1;
+        recvaddr->sll_pkttype = 0;
+    }else
+        printf("ICMP: NO\n");
+    return isICMP;
+}
+
+int main(){
+    unsigned char mac[6];
+    unsigned char mac_addrs[5][6];
+    int packet_socket;
+    fd_set sockets;
+    FD_ZERO(&sockets);
+    //get list of interfaces (actually addresses)
+    struct ifaddrs *ifaddr, *tmp;
+    buffer = (void*)malloc(BUF_SIZE);
+    unsigned char* arphead = buffer;
+    struct ethhdr *eh = (struct ethhdr *)arphead;
+    struct arp_header *ah;
+    if(getifaddrs(&ifaddr)==-1){
+        perror("getifaddrs");
+        return 1;
+    }
+    
+    char ch, file_name[25];
+    FILE *fp;
+    struct tableentry table_ip[6];
+    
+    printf("Enter the name of the routing table\n");
+    gets(file_name);
+    
+    fp = fopen(file_name,"r"); // read mode
+    
+    if( fp == NULL )
+    {
+        perror("Error while opening the file.\n");
+        return 0;
+    }
+    
+    char *line = NULL;
+    size_t len = 0;
+    ssize_t read;
+    char string[50];
+    
+    int i = 0;
+    while ((read = getline(&line, &len, fp)) != -1) {
+        //printf("Retrieved line of length %zu :\n", read);
+        //printf("%s", line);
+        strcpy(string, line);
+        string[read] = '\0';
+        strcpy(table_ip[i].prefix, strtok(string, " "));
+        strcpy(table_ip[i].nexthop, strtok(NULL, " "));
+        strcpy(table_ip[i].interface, strtok(NULL, "\n"));
+        i++;
+        printf("%s\n",table_ip[i].interface);
+    }
+    
+    
+    free(line);
+    fclose(fp);
+    
+    int q = 0;
+    //have the list, loop over the list
+    for(tmp = ifaddr; tmp!=NULL; tmp=tmp->ifa_next){
+        //Check if this is a packet address, there will be one per
+        //interface.  There are IPv4 and IPv6 as well, but we don't care
+        //about those for the purpose of enumerating interfaces. We can
+        //use the AF_INET addresses in this list for example to get a list
+        //of our own IP addresses
+        if(tmp->ifa_addr->sa_family==AF_PACKET){
+            printf("Interface: %s\n",tmp->ifa_name);
+            //create a packet socket on interface r?-eth1
+            if(!strncmp(&(tmp->ifa_name[3]),"eth",3)){
+                getmac(mac,tmp->ifa_name);
+                int k;
+                for(k = 1; k < 7; k++){
+                    printf("ROUTER MAC: %02X\n", mac_addrs[q][k]);
+                }
+                printf("Creating Socket on interface %s\n",tmp->ifa_name);
+                //create a packet socket
+                //AF_PACKET makes it a packet socket
+                //SOCK_RAW makes it so we get the entire packet
+                //could also use SOCK_DGRAM to cut off link layer header
+                //ETH_P_ALL indicates we want all (upper layer) protocols
+                //we could specify just a specific one
+                packet_socket = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
+                if(packet_socket<0){
+                    perror("socket");
+                    return 2;
+                }
+                //Bind the socket to the address, so we only get packets
+                //recieved on this specific interface. For packet sockets, the
+                //address structure is a struct sockaddr_ll (see the man page
+                //for "packet"), but of course bind takes a struct sockaddr.
+                //Here, we can use the sockaddr we got from getifaddrs (which
+                //we could convert to sockaddr_ll if we needed to)
+                if(bind(packet_socket,tmp->ifa_addr,sizeof(struct sockaddr_ll))==-1){
+                    perror("bind");
+                }
+                mac_addrs[q][0] = packet_socket;
+                FD_SET(packet_socket, &sockets);
+            }
+            q++;
+        }
+    }
+    //free the interface list when we don't need it anymore
+    freeifaddrs(ifaddr);
+    
+    //loop and recieve packets. We are only looking at one interface,
+    //for the project you will probably want to look at more (to do so,
+    //a good way is to have one socket per interface and use select to
+    //see which ones have data)
+    printf("Ready to recieve now\n");
+    int count = 0;
+    int ICMPcount = 0;
+    while(1){
+        struct sockaddr_ll recvaddr;
+        int recvaddrlen=sizeof(struct sockaddr_ll);
+        
+        fd_set tmp_set = sockets;
+        select(FD_SETSIZE, &tmp_set, NULL, NULL, NULL);
+        
+        int sock;
+        for(sock = 0; sock < FD_SETSIZE; sock++) {
+            if(FD_ISSET(sock,&tmp_set)){
+                
+                //we can use recv, since the addresses are in the packet, but we
+                //use recvfrom because it gives us an easy way to determine if
+                //this packet is incoming or outgoing (when using ETH_P_ALL, we
+                //see packets in both directions. Only outgoing can be seen when
+                //using a packet socket with some specific protocol)
+                int n = recvfrom(sock, buffer, 1500,0,(struct sockaddr*)&recvaddr, &recvaddrlen);
+                //ignore outgoing packets (we can't disable some from being sent
+                //by the OS automatically, for example ICMP port unreachable
+                //messages, so we will just ignore them here)
+                if(recvaddr.sll_pkttype==PACKET_OUTGOING)
+                    continue;
+                //start processing all others
+		//printf("recvaddr %i", &recvaddr); 
+                printf("Got a %d byte packet\n", n);
+                
+                //what else to do is up to you, you can send packets with send,
+                //just like we used for TCP sockets (or you can use sendto, but it
+                //is not necessary, since the headers, including all addresses,
+                //need to be in the buffer you are sending)
+                
+                
+                //printf("sll_protocol: %d\n", sock);
+                
+                int isARP = process_arppkt(&recvaddr, &count);
+                int isICMP = process_icmppkt(&recvaddr, &ICMPcount);
+                
+                if(isARP){
+		   
+                    ah = (struct arp_header *) (arphead+14);
+                    struct arp_header * new_ah;
+                    new_ah = (void*)malloc(sizeof(struct arp_header));
+                    
+                    memcpy(new_ah->arp_sma,ah->arp_dma,sizeof(ah->arp_dma));
+                    memcpy(new_ah->arp_dma,ah->arp_sma,sizeof(ah->arp_sma));
+                    memcpy(new_ah->arp_sia,ah->arp_dia,sizeof(ah->arp_dia));
+                    memcpy(new_ah->arp_dia,ah->arp_sia,sizeof(ah->arp_sia));
+                    
+                    ah->arp_dia[0] = new_ah->arp_dia[0];
+                    ah->arp_dia[1] = new_ah->arp_dia[1];
+                    ah->arp_dia[2] = new_ah->arp_dia[2];
+                    ah->arp_dia[3] = new_ah->arp_dia[3];
+                    
+                    ah->arp_sia[0] = new_ah->arp_sia[0];
+                    ah->arp_sia[1] = new_ah->arp_sia[1];
+                    ah->arp_sia[2] = new_ah->arp_sia[2];
+                    ah->arp_sia[3] = new_ah->arp_sia[3];
+                    
+                    ah->arp_dma[0] = new_ah->arp_dma[0];
+                    ah->arp_dma[1] = new_ah->arp_dma[1];
+                    ah->arp_dma[2] = new_ah->arp_dma[2];
+                    ah->arp_dma[3] = new_ah->arp_dma[3];
+                    ah->arp_dma[4] = new_ah->arp_dma[4];
+                    ah->arp_dma[5] = new_ah->arp_dma[5];
+                    
+                    ah->arp_op = (unsigned short) htons(2);
+                    int restart = 1;
+                    int interface = 4;
+                    for(interface; interface > 0; interface--){
+                        if(mac_addrs[interface][0] == sock){
+                            restart = 0;
+                            break;
+                        }
+                    }
+                    if(restart){
+                        continue;
+                    }
+                    ah->arp_sma[0] = mac_addrs[interface][1];
+                    ah->arp_sma[1] = mac_addrs[interface][2];
+                    ah->arp_sma[2] = mac_addrs[interface][3];
+                    ah->arp_sma[3] = mac_addrs[interface][4];
+                    ah->arp_sma[4] = mac_addrs[interface][5];
+                    ah->arp_sma[5] = mac_addrs[interface][6];
+                    
+                    sendto(sock, buffer, n, 0,(struct sockaddr *) &recvaddr, sizeof(recvaddr));
+                    printf("Sender MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
+                           ah->arp_sma[0],
+                           ah->arp_sma[1],
+                           ah->arp_sma[2],
+                           ah->arp_sma[3],
+                           ah->arp_sma[4],
+                           ah->arp_sma[5]
+                           );
+                    printf("Dest MAC: %02X:%02x:%02X:%02X:%02X:%02X\n",
+                           ah->arp_dma[0],
+                           ah->arp_dma[1],
+                           ah->arp_dma[2],
+                           ah->arp_dma[3],
+                           ah->arp_dma[4],
+                           ah->arp_dma[5]
+                           );
+                    printf("Send IP: %d.%d.%d.%d\n",
+                           ah->arp_sia[0],
+                           ah->arp_sia[1],
+                           ah->arp_sia[2],
+                           ah->arp_sia[3]
+                           );
+                    printf("Dest IP: %d.%d.%d.%d\n",
+                           ah->arp_dia[0],
+                           ah->arp_dia[1],
+                           ah->arp_dia[2],
+                           ah->arp_dia[3]
+                           );
+                }
+                
+                
+                if(isICMP){
+                    void * ip_head = arphead + 14;
+                    struct ip_header * ip;
+                    
+                    ip = (struct ip_header *) ip_head;
+                    
+                    unsigned short * pt = arphead + 14;
+                    
+                    unsigned short calc = calc_check(pt);
+                    
+                    if(calc != ip->ip_sum){
+                        printf("Checksum incorrect. Discarding packet.(0x%X!=0x%X)\n", ip->ip_sum , calc);
+                        return 0;
+                    }
+                    else{
+                        printf("Checksum calculation correct.(0x%X = 0x%X)\n", ip->ip_sum, calc);
+                    }
+                    
+                    ip->ip_ttl--;
+		    
+		    void * start_spot = arphead + 26;
+		    
+                    if(ip->ip_ttl <= 0){
+                        void * icmp_packet = arphead + 34;
+                        struct icmp_pack * icmp_payload;
+                        icmp_payload = (struct imcp_pack *) icmp_packet;
+                        
+                        icmp_payload->icmp_type = 11;
+                        
+                        sendto(sock, buffer, n, 0,(struct sockaddr *) &recvaddr, sizeof(recvaddr));
+		    } else {
+                        
+                        unsigned short calc2 = calc_check(pt);
+                        
+                        printf("Updated checksum -> 0x%X\n", calc2);
+                        
+                        ip->ip_sum = calc2;
+                        
+                        printf("Checksum returned -> 0x%X\n", ip->ip_sum);
+                        
+                        void * start_data = arphead + 26;
+                        struct ip_src_dst * icmp;
+                        icmp = (struct ip_src_dst *) start_data;
+                        
+			//flip the source and destination using temp holder
+                        char * toSrc = arphead;
+                        char * toDst = arphead + 6;
+                        char holder[6];
+                        
+                        holder[0] = toDst[0];
+                        holder[1] = toDst[1];
+                        holder[2] = toDst[2];
+                        holder[3] = toDst[3];
+                        holder[4] = toDst[4];
+                        holder[5] = toDst[5];
+                        
+                        toDst[0] = toSrc[0];
+                        toDst[1] = toSrc[1];
+                        toDst[2] = toSrc[2];
+                        toDst[3] = toSrc[3];
+                        toDst[4] = toSrc[4];
+                        toDst[5] = toSrc[5];
+                        
+                        toSrc[0] = holder[0];
+                        toSrc[1] = holder[1];
+                        toSrc[2] = holder[2];
+                        toSrc[3] = holder[3];
+                        toSrc[4] = holder[4];
+                        toSrc[5] = holder[5];
+                        
+                        char tmp_pnt[4];
+                        memcpy(&tmp_pnt, icmp->src, sizeof(tmp_pnt));
+                        //icmp->src = icmp->dst;
+                        memcpy(&icmp->src, &icmp->dst, sizeof(icmp->src));
+                        memcpy(&icmp->dst, &tmp_pnt, sizeof(tmp_pnt));
+                        //icmp->dst =  (char *) tmp_pnt;
+                        void * icmp_type = arphead + 34;
+                        char * h = (char *) icmp_type;
+		
+			// attempting to check if ICMP host unreachable error
+                        if(*h == 3){
+			  perror("ICMP Host Unreachable Error");
+			  exit(1);
+			}
+                        
+                        sendto(sock, buffer, n, 0,(struct sockaddr *) &recvaddr, sizeof(recvaddr));
+                    }
+                }
+            }
+        }
+        
+    }
+    //exit
+    return 0;
+}
+
+unsigned short calc_check(unsigned short int * ptr){
+    unsigned  chk = 0;
+    int s = 10;
+    int c = 0;
+    while(s > 0){
+        if(c != 5){
+            chk += *ptr;
+        }
+        ptr++;
+        s--;
+        c++;
+    }
+    chk = ((chk >> 16) + (chk & 0xffff));
+    chk += (chk >> 16);
+    return (~chk);
+}
+
+
